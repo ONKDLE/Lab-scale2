@@ -2,12 +2,15 @@
 API 입출력 검증용 Pydantic 스키마.
 스프린트1: Category(카테고리)
 스프린트2: Transaction(거래내역) - category를 참조(FK)하는 두 번째 테이블
+스프린트3: 상태(status) 필드 + 카테고리 상세 조회 시 거래 목록을 함께 묶어서 반환(JOIN)
 """
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
+
+# ---- Category ----
 
 class CategoryBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="카테고리명")
@@ -33,6 +36,7 @@ class CategoryOut(CategoryBase):
 
     id: int
     user_id: int
+    status: str  # ACTIVE | ARCHIVED
 
 
 # ---- Transaction (스프린트2: 두 번째 테이블) ----
@@ -55,3 +59,10 @@ class TransactionOut(BaseModel):
     amount: Decimal
     transaction_date: date
     source_bank: str
+    status: str  # ACTIVE | CANCELLED
+
+
+# ---- 스프린트3: 카테고리 + 연결된 거래 묶음 조회 ----
+
+class CategoryDetailOut(CategoryOut):
+    transactions: List[TransactionOut] = []

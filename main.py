@@ -8,7 +8,7 @@ from app.routers import category, transaction
 app = FastAPI(
     title="MyFin API",
     description="마이핀(MyFin): 커스텀 카테고리 및 은행 CSV 연동 기반 스마트 가계부",
-    version="0.2.0 (Sprint 2)",
+    version="0.3.0 (Sprint 3)",
 )
 
 app.include_router(category.router)
@@ -17,19 +17,23 @@ app.include_router(transaction.router)
 
 @app.on_event("startup")
 def on_startup():
-    # 기술명세서 3-3 SQL DDL과 동일한 스키마를 생성
     Base.metadata.create_all(bind=engine)
-    _seed_default_user()
+    _seed_test_users()
 
 
-def _seed_default_user():
-    """인증(FR-06) 구현 전까지 사용할 임시 테스트 유저(id=1)를 생성."""
+def _seed_test_users():
+    """
+    인증(FR-06) 구현 전까지 쓸 임시 테스트 유저 2명을 생성.
+    id=1: 기본 사용자 (헤더 없이 요청하면 이 사람으로 간주)
+    id=2: 권한(인가) 테스트용 '다른 사용자' — X-User-Id: 2 헤더로 흉내낼 때 사용
+    """
     db: Session = SessionLocal()
     try:
-        existing = db.query(models.User).filter(models.User.id == 1).first()
-        if existing is None:
-            db.add(models.User(email="test@mypin.dev", password_hash="temp-not-a-real-hash"))
-            db.commit()
+        if db.query(models.User).filter(models.User.id == 1).first() is None:
+            db.add(models.User(id=1, email="test@mypin.dev", password_hash="temp-not-a-real-hash"))
+        if db.query(models.User).filter(models.User.id == 2).first() is None:
+            db.add(models.User(id=2, email="other@mypin.dev", password_hash="temp-not-a-real-hash"))
+        db.commit()
     finally:
         db.close()
 
