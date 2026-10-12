@@ -1,6 +1,10 @@
 """
 기술명세서 '3. 데이터 모델링'에서 정의한 5개 테이블의 ORM 모델.
 SQL DDL(기술명세서 3-3)과 컬럼/제약조건이 1:1로 대응되도록 작성했습니다.
+
+6주차 스프린트3에서 추가된 것:
+ - Category.status, Transaction.status : 삭제 대신 '상태 변경'으로 처리하기 위한 컬럼
+   (하드 삭제가 아니라 ACTIVE/ARCHIVED, ACTIVE/CANCELLED 로 상태만 바꿈)
 """
 from sqlalchemy import (
     Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Float, func
@@ -29,6 +33,7 @@ class Category(Base):
     icon = Column(String(20), nullable=True)
     color = Column(String(7), nullable=True)  # HEX, 예: #4472C4
     parent_category_id = Column(Integer, ForeignKey("category.id"), nullable=True)
+    status = Column(String(20), nullable=False, default="ACTIVE")  # ACTIVE | ARCHIVED
 
     owner = relationship("User", back_populates="categories")
     parent = relationship("Category", remote_side=[id], backref="subcategories")
@@ -45,6 +50,7 @@ class Transaction(Base):
     transaction_date = Column(Date, nullable=False)
     source_bank = Column(String(30), nullable=False)
     raw_row_hash = Column(String(64), unique=True, nullable=False)
+    status = Column(String(20), nullable=False, default="ACTIVE")  # ACTIVE | CANCELLED
 
 
 class Budget(Base):
