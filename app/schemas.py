@@ -66,3 +66,15 @@ class TransactionOut(BaseModel):
 
 class CategoryDetailOut(CategoryOut):
     transactions: List[TransactionOut] = []
+
+
+# ---- 스프린트4: 페이지 나누기(Pagination) 공통 응답 ----
+
+class TransactionPage(BaseModel):
+    """거래 목록 + 페이지 정보. 한 번에 일부(size개)만 담아서 응답한다."""
+    items: List[TransactionOut]
+    page: int            # 현재 페이지 번호 (1부터 시작)
+    size: int            # 페이지당 개수
+    total_elements: int  # 조건에 맞는 전체 거래 수
+    total_pages: int     # 전체 페이지 수
+    has_next: bool       # 다음 페이지가 있는지

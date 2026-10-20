@@ -8,7 +8,7 @@ from app.routers import category, transaction
 app = FastAPI(
     title="MyFin API",
     description="마이핀(MyFin): 커스텀 카테고리 및 은행 CSV 연동 기반 스마트 가계부",
-    version="0.3.0 (Sprint 3)",
+    version="0.4.0 (Sprint 4)",
 )
 
 app.include_router(category.router)
