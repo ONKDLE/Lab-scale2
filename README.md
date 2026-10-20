@@ -6,6 +6,7 @@
 - **4주차 스프린트1**: category(카테고리) CRUD API
 - **5주차 스프린트2**: transaction(거래) 테이블 추가 + category와 FK 연결 + 조건 처리 API(중복 거래 거절)
 - **6주차 스프린트3**: 관계형 조회(JOIN) + 상태 변경·취소 API + 권한(인가) 체크
+- **7주차 스프린트4**: 거래 목록 페이지 나누기 + 정렬 + 상태 필터 + 키워드 검색 + 잘못된 값 400 처리
 
 ## 폴더 구조
 ```
@@ -22,6 +23,8 @@ mypin/
 ├── smoke_test.py             # 스프린트1 자동 테스트 (13개)
 ├── smoke_test_sprint2.py     # 스프린트2 자동 테스트 (9개)
 ├── smoke_test_sprint3.py     # 스프린트3 자동 테스트 (11개)
+├── smoke_test_sprint4.py     # 스프린트4 자동 테스트 (27개)
+├── seed_demo_data.py         # 시연용 샘플 거래 30건 넣기
 └── requirements.txt
 ```
 
@@ -46,6 +49,12 @@ mypin/
    python smoke_test.py            # 스프린트1
    python smoke_test_sprint2.py    # 스프린트2
    python smoke_test_sprint3.py    # 스프린트3
+   python smoke_test_sprint4.py    # 스프린트4
+   ```
+
+4. 시연용 샘플 데이터 넣기 (선택, 페이지 나누기를 눈으로 보려면 필요)
+   ```bash
+   python seed_demo_data.py        # 거래 30건 (여러 번 실행해도 중복되지 않음)
    ```
 
 ## 구현된 엔드포인트
@@ -64,9 +73,23 @@ mypin/
 | Method | Path | 설명 | 성공 코드 |
 |---|---|---|---|
 | POST | /transactions | 거래 등록 (중복이면 400) | 201 |
-| GET | /transactions | 거래 목록 조회 | 200 |
+| GET | /transactions | 거래 목록 조회 (페이지 나누기·정렬·필터·검색) | 200 / 400 |
 | GET | /transactions/{id} | 거래 상세 조회 | 200 |
 | PATCH | /transactions/{id}/cancel | 거래 취소 처리 (본인 소유만, 아니면 403) | 200 |
+
+### 거래 목록 조회 파라미터 (스프린트4)
+
+| 파라미터 | 설명 | 기본값 | 잘못된 값 |
+|---|---|---|---|
+| page | 페이지 번호 (1부터) | 1 | 0, 음수, 숫자 아님 → 400 |
+| size | 페이지당 개수 | 10 | 0, 음수, 100 초과, 숫자 아님 → 400 |
+| sort | `필드,방향` (필드: id, transaction_date, amount, merchant_name / 방향: asc, desc) | transaction_date,desc | 없는 필드·방향 → 400 |
+| status | ACTIVE 또는 CANCELLED | (전체) | 그 외 값 → 400 |
+| keyword | 가맹점명 검색어 (부분 일치) | (검색 안 함) | 100자 초과 → 400 |
+
+응답에는 거래 목록(`items`)과 함께 `page`, `size`, `total_elements`, `total_pages`, `has_next`가 들어갑니다.
+예: `GET /transactions?status=ACTIVE&keyword=스타벅스&sort=amount,asc&page=1&size=5`
+(status와 keyword를 같이 보내면 두 조건을 모두 만족하는 거래만 나옵니다.)
 
 ## 권한(인가) 체크 시연 방법 — X-User-Id 헤더
 
@@ -89,6 +112,9 @@ mypin/
 - **남의 카테고리를 보관(archive) 시도 → 403**
 
 **transaction**
+- 존재하지 않는 페이지(데이터 없는 페이지) 조회 → 200 OK + 빈 목록
+- 검색어의 `%`, `_`는 와일드카드가 아니라 글자로 검색
+- 전체 개수는 COUNT 쿼리, 목록은 LIMIT/OFFSET 쿼리로 분리해서 조회
 - 같은 날짜·금액·가맹점·은행의 거래를 중복 등록 시도 → 400
 - 존재하지 않는 category_id로 거래 생성 시도 → 404
 - **남의 거래를 취소(cancel) 시도 → 403**

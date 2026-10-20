@@ -46,7 +46,7 @@ check("카테고리 연결(FK) 확인", res.json().get("category_id") == categor
 
 res = client.get("/transactions")
 check("GET /transactions → 200 OK", res.status_code == 200)
-check("목록에 방금 만든 거래 포함", any(t["id"] == transaction_id for t in res.json()))
+check("목록에 방금 만든 거래 포함", any(t["id"] == transaction_id for t in res.json()["items"]))
 
 res = client.get(f"/transactions/{transaction_id}")
 check("GET /transactions/{id} → 200 OK", res.status_code == 200)
