@@ -7,6 +7,8 @@
 - **5주차 스프린트2**: transaction(거래) 테이블 추가 + category와 FK 연결 + 조건 처리 API(중복 거래 거절)
 - **6주차 스프린트3**: 관계형 조회(JOIN) + 상태 변경·취소 API + 권한(인가) 체크
 - **7주차 스프린트4**: 거래 목록 페이지 나누기 + 정렬 + 상태 필터 + 키워드 검색 + 잘못된 값 400 처리
+- **9주차 스프린트5**: React 화면 연동 (거래 목록, 상태 탭, 검색, 페이지 번호, 로딩/빈/에러 화면) + 백엔드 CORS 허용
+- **카드 이용내역 업로드**: 카드사 이용내역 엑셀(.xls)을 올리면 거래로 저장 (중복 방지, 이상한 줄은 건너뛰고 이유 안내)
 
 ## 폴더 구조
 ```
@@ -17,15 +19,22 @@ mypin/
 │   ├── models.py             # 5개 테이블 ORM 모델 (status 컬럼 포함)
 │   ├── schemas.py            # API 요청/응답 검증(Pydantic)
 │   ├── deps.py               # 임시 '요청자 식별' 장치 (로그인 생기기 전까지 X-User-Id 헤더로 대체)
+│   ├── importers/
+│   │   └── card_statement.py # 카드 이용내역 엑셀(.xls) 읽기
 │   └── routers/
 │       ├── category.py       # 카테고리 CRUD + 상세조회(거래 묶음) + 보관(archive)
+│       ├── importer.py       # 이용내역 파일 업로드 (POST /transactions/import)
 │       └── transaction.py    # 거래 등록/조회 + 취소(cancel)
 ├── smoke_test.py             # 스프린트1 자동 테스트 (13개)
 ├── smoke_test_sprint2.py     # 스프린트2 자동 테스트 (9개)
 ├── smoke_test_sprint3.py     # 스프린트3 자동 테스트 (11개)
 ├── smoke_test_sprint4.py     # 스프린트4 자동 테스트 (27개)
+├── smoke_test_sprint5.py     # 스프린트5 백엔드 테스트 (CORS, 7개)
+├── smoke_test_import.py      # 이용내역 업로드 테스트
 ├── seed_demo_data.py         # 시연용 샘플 거래 30건 넣기
-└── requirements.txt
+├── frontend/                 # React 화면 (실행 방법은 frontend/README.md)
+├── requirements.txt          # 실행에 필요한 패키지
+└── requirements-dev.txt      # 테스트에만 필요한 패키지
 ```
 
 ## 실행 방법
@@ -35,7 +44,7 @@ mypin/
    python -m venv venv
    source venv/bin/activate        # Windows는 venv\Scripts\activate
    pip install -r requirements.txt
-   pip install httpx               # smoke_test 실행 시에만 필요
+   pip install -r requirements-dev.txt   # 테스트(smoke_test)를 돌릴 때만 필요
    ```
 
 2. 서버 실행
@@ -50,12 +59,25 @@ mypin/
    python smoke_test_sprint2.py    # 스프린트2
    python smoke_test_sprint3.py    # 스프린트3
    python smoke_test_sprint4.py    # 스프린트4
+   python smoke_test_sprint5.py    # 스프린트5 (CORS)
+   python smoke_test_import.py     # 이용내역 업로드
    ```
 
 4. 시연용 샘플 데이터 넣기 (선택, 페이지 나누기를 눈으로 보려면 필요)
    ```bash
    python seed_demo_data.py        # 거래 30건 (여러 번 실행해도 중복되지 않음)
    ```
+
+## 화면(프론트엔드) 실행 — 9주차
+
+백엔드를 켠 상태에서, 다른 터미널로 `frontend` 폴더에 들어가 실행합니다. 자세한 내용은 `frontend/README.md`를 보세요.
+```bash
+cd frontend
+npm install
+npm run dev      # http://localhost:5173
+npm test         # 화면 자동 테스트
+```
+백엔드는 `http://localhost:5173`, `http://127.0.0.1:5173`에서 온 요청만 허용합니다(CORS). 배포할 때는 환경변수 `CORS_ORIGINS`로 바꿉니다.
 
 ## 구현된 엔드포인트
 
@@ -75,6 +97,7 @@ mypin/
 | POST | /transactions | 거래 등록 (중복이면 400) | 201 |
 | GET | /transactions | 거래 목록 조회 (페이지 나누기·정렬·필터·검색) | 200 / 400 |
 | GET | /transactions/{id} | 거래 상세 조회 | 200 |
+| POST | /transactions/import | 카드 이용내역 엑셀(.xls) 업로드 | 200 / 400 / 413 |
 | PATCH | /transactions/{id}/cancel | 거래 취소 처리 (본인 소유만, 아니면 403) | 200 |
 
 ### 거래 목록 조회 파라미터 (스프린트4)
@@ -90,6 +113,23 @@ mypin/
 응답에는 거래 목록(`items`)과 함께 `page`, `size`, `total_elements`, `total_pages`, `has_next`가 들어갑니다.
 예: `GET /transactions?status=ACTIVE&keyword=스타벅스&sort=amount,asc&page=1&size=5`
 (status와 keyword를 같이 보내면 두 조건을 모두 만족하는 거래만 나옵니다.)
+
+## 카드 이용내역 업로드
+
+카드사 사이트에서 받은 **이용내역 엑셀(.xls)** 을 올리면 거래로 저장합니다.
+Swagger(`/docs`)의 `POST /transactions/import` → `Try it out` → 파일 선택 → `Execute`.
+
+- 머리글 이름(`이용일시`, `이용하신곳`, `이용금액`, `상태`)으로 열을 찾기 때문에, 머리글 위에 제목 줄이 있어도 되고 열 위치가 달라도 됩니다.
+- 같은 파일을 다시 올려도 이미 저장된 거래는 건너뜁니다 (거래 시각까지 비교해서 같은 날 같은 금액을 두 번 결제한 경우는 별개로 저장).
+- 줄 하나가 이상해도 전체가 실패하지 않고, 응답의 `errors`에 건너뛴 줄 번호와 이유가 담깁니다.
+- 응답 예: `{"imported": 4, "duplicates": 0, "skipped": 0, "total_rows": 4, ...}`
+- 카테고리는 비워 둡니다(미분류). `source_bank`는 출처 이름(기본 `체크카드`)입니다.
+
+**아직 안 되는 것 (한계)**
+- `.xls`만 지원합니다. `.xlsx`, `.csv`는 샘플이 없어서 아직 지원하지 않습니다.
+- 샘플에는 정상 결제(`전표매입`)만 있어서, 상태에 '취소'가 들어 있으면 취소 거래로 보는 것까지만 구현했습니다. 금액이 0 이하인 줄은 건너뛰고 이유를 알려 줍니다.
+- 같은 분(分)에 같은 가게에서 같은 금액을 결제한 줄이 한 파일에 두 개 있으면 1건으로 저장됩니다.
+- 새로 설치한 패키지(`python-multipart`, `xlrd`)가 필요합니다: `python -m pip install -r requirements.txt`
 
 ## 권한(인가) 체크 시연 방법 — X-User-Id 헤더
 
