@@ -1,17 +1,35 @@
+import os
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app import models
 from app.database import Base, engine, SessionLocal
-from app.routers import category, transaction
+from app.routers import category, importer, transaction
 
 app = FastAPI(
     title="MyFin API",
     description="마이핀(MyFin): 커스텀 카테고리 및 은행 CSV 연동 기반 스마트 가계부",
-    version="0.4.0 (Sprint 4)",
+    version="0.6.0 (Import)",
+)
+
+# 프론트엔드(React 개발 서버, 기본 5173 포트)가 이 API를 브라우저에서 호출할 수 있게 허용한다.
+# 배포할 때는 환경변수 CORS_ORIGINS="https://내도메인" 으로 바꾸면 된다 (쉼표로 여러 개 가능).
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(category.router)
+app.include_router(importer.router)  # /transactions/import 를 /{id} 보다 먼저 등록
 app.include_router(transaction.router)
 
 

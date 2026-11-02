@@ -78,3 +78,20 @@ class TransactionPage(BaseModel):
     total_elements: int  # 조건에 맞는 전체 거래 수
     total_pages: int     # 전체 페이지 수
     has_next: bool       # 다음 페이지가 있는지
+
+
+# ---- 카드 이용내역 파일 업로드 결과 ----
+
+class ImportRowError(BaseModel):
+    row_number: int  # 엑셀에서 보이는 줄 번호
+    reason: str
+
+
+class ImportSummary(BaseModel):
+    """업로드 결과 요약. 이상한 줄이 있어도 나머지는 저장하고, 건너뛴 줄과 이유를 알려준다."""
+    source_bank: str
+    total_rows: int   # 파일에서 읽은 거래 줄 수 (빈 줄 제외)
+    imported: int     # 새로 저장한 거래 수
+    duplicates: int   # 이미 저장돼 있어서 건너뛴 거래 수
+    skipped: int      # 형식이 이상해서 건너뛴 줄 수
+    errors: List[ImportRowError]
