@@ -2,10 +2,12 @@
 // amount는 백엔드가 소수 정확도를 지키려고 문자열("4500.00")로 내려준다.
 
 export type TransactionStatus = 'ACTIVE' | 'CANCELLED';
+export type TransactionType = 'EXPENSE' | 'INCOME';
 
 export interface Transaction {
   id: number;
   user_id: number;
+  transaction_type: TransactionType;
   category_id: number | null;
   merchant_name: string;
   amount: string;
