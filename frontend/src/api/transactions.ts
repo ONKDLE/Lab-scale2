@@ -30,3 +30,11 @@ export function cancelTransaction(id: number): Promise<Transaction> {
 export function restoreTransaction(id: number): Promise<Transaction> {
   return apiRequest<Transaction>('PATCH', `/transactions/${id}/restore`);
 }
+
+
+/** PATCH /transactions/{id}/category — 거래 카테고리 변경. null이면 미분류 */
+export function updateTransactionCategory(id: number, categoryId: number | null): Promise<Transaction> {
+  return apiRequest<Transaction>('PATCH', `/transactions/${id}/category`, {
+    body: { category_id: categoryId },
+  });
+}
