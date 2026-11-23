@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { archiveCategory, getCategoryDetail, unarchiveCategory } from '../api/categories';
+import { archiveCategory, deleteCategory, getCategoryDetail, updateCategory, unarchiveCategory, type CategoryInput } from '../api/categories';
 import { ApiError } from '../api/client';
 import { cancelTransaction, restoreTransaction } from '../api/transactions';
 import { useAuth } from '../auth/AuthContext';
+import CategoryForm from '../components/CategoryForm';
 import ConfirmModal from '../components/ConfirmModal';
 import ErrorState from '../components/ErrorState';
 import TransactionSkeleton from '../components/TransactionSkeleton';
@@ -16,7 +17,7 @@ import NotFoundPage from './NotFoundPage';
 
 type Confirm =
   | { kind: 'cancel' | 'restore'; transaction: Transaction }
-  | { kind: 'archive' | 'unarchive' };
+  | { kind: 'archive' | 'unarchive' | 'delete' };
 
 interface State {
   detail: CategoryDetail | null;
@@ -47,6 +48,13 @@ function describe(confirm: Confirm): { title: string; message: string; confirmLa
         confirmLabel: '보관',
         danger: true,
       };
+    case 'delete':
+      return {
+        title: '카테고리를 삭제할까요?',
+        message: '연결된 거래가 없는 카테고리만 삭제할 수 있습니다. 삭제한 카테고리는 복구할 수 없습니다.',
+        confirmLabel: '삭제',
+        danger: true,
+      };
     case 'unarchive':
       return {
         title: '보관을 해제할까요?',
@@ -68,6 +76,7 @@ export default function CategoryDetailPage() {
   const [reloadCount, setReloadCount] = useState(0);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (id === null) return;
@@ -100,6 +109,49 @@ export default function CategoryDetailPage() {
         : previous,
     );
 
+  const handleUpdate = async (value: CategoryInput) => {
+    if (!state.detail || busy) return;
+    setBusy(true);
+    try {
+      const updated = await updateCategory(state.detail.id, value);
+      setState((previous) =>
+        previous.detail
+          ? {
+              ...previous,
+              detail: {
+                ...previous.detail,
+                name: updated.name,
+                icon: updated.icon,
+                color: updated.color,
+                parent_category_id: updated.parent_category_id,
+              },
+            }
+          : previous,
+      );
+      setEditing(false);
+      toast.success('카테고리를 수정했습니다.');
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : '카테고리를 수정하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runDelete = async () => {
+    if (!state.detail || busy) return;
+    setBusy(true);
+    try {
+      await deleteCategory(state.detail.id);
+      toast.success('카테고리를 삭제했습니다.');
+      window.location.assign('/categories');
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : '카테고리를 삭제하지 못했습니다.');
+    } finally {
+      setBusy(false);
+      setConfirm(null);
+    }
+  };
+
   const runConfirmed = async () => {
     if (!confirm || !state.detail || busy) return;
     setBusy(true);
@@ -119,6 +171,9 @@ export default function CategoryDetailPage() {
           toast.success('카테고리를 보관했습니다.');
           break;
         }
+        case 'delete':
+          await runDelete();
+          return;
         case 'unarchive': {
           const updated = await unarchiveCategory(state.detail.id);
           setState((previous) => (previous.detail ? { ...previous, detail: { ...previous.detail, status: updated.status } } : previous));
@@ -183,14 +238,22 @@ export default function CategoryDetailPage() {
           <span className={archived ? 'badge badge--archived' : 'badge badge--active'}>{archived ? '보관됨' : '사용 중'}</span>
         </div>
         {isOwner && (
-          <button
-            type="button"
-            className={archived ? 'secondary-button' : 'danger-button'}
-            onClick={() => setConfirm({ kind: archived ? 'unarchive' : 'archive' })}
-            disabled={busy}
-          >
-            {archived ? '보관 해제' : '보관하기'}
-          </button>
+          <div className="detail-actions">
+            <button type="button" className="secondary-button" onClick={() => setEditing(true)} disabled={busy}>
+              수정
+            </button>
+            <button
+              type="button"
+              className={archived ? 'secondary-button' : 'danger-button'}
+              onClick={() => setConfirm({ kind: archived ? 'unarchive' : 'archive' })}
+              disabled={busy}
+            >
+              {archived ? '보관 해제' : '보관하기'}
+            </button>
+            <button type="button" className="danger-button" onClick={() => setConfirm({ kind: 'delete' })} disabled={busy}>
+              삭제
+            </button>
+          </div>
         )}
       </header>
 
@@ -252,6 +315,21 @@ export default function CategoryDetailPage() {
             );
           })}
         </ul>
+      )}
+
+      {editing && (
+        <div className="modal-backdrop">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="edit-category-title">
+            <h2 id="edit-category-title" className="modal-title">카테고리 수정</h2>
+            <CategoryForm
+              initial={{ name: detail.name, color: detail.color, icon: detail.icon, parent_category_id: detail.parent_category_id }}
+              submitLabel="저장"
+              busy={busy}
+              onSubmit={handleUpdate}
+              onCancel={() => !busy && setEditing(false)}
+            />
+          </div>
+        </div>
       )}
 
       {modal && (

@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getCategories } from '../api/categories';
+import { createCategory, getCategories } from '../api/categories';
 import ErrorState from '../components/ErrorState';
+import CategoryForm from '../components/CategoryForm';
+import { useToast } from '../components/Toast';
 import { formatAmount } from '../lib/format';
+import type { CategoryInput } from '../api/categories';
 import type { CategorySummary } from '../types/category';
 
-/** 카테고리 목록. 카드를 누르면 상세 화면으로 이동한다. */
 export default function CategoryListPage() {
   const [categories, setCategories] = useState<CategorySummary[] | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
+  const [showCreate, setShowCreate] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -28,14 +33,27 @@ export default function CategoryListPage() {
 
   const reload = useCallback(() => setReloadCount((count) => count + 1), []);
 
+  const handleCreate = async (value: CategoryInput) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await createCategory(value);
+      toast.success('카테고리를 만들었습니다.');
+      setShowCreate(false);
+      reload();
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : '카테고리를 만들지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (error) return <ErrorState message={error.message} onRetry={reload} />;
 
   if (categories === null) {
     return (
       <div aria-busy="true">
-        <p role="status" className="visually-hidden">
-          카테고리를 불러오는 중입니다…
-        </p>
+        <p role="status" className="visually-hidden">카테고리를 불러오는 중입니다…</p>
         <ul className="category-grid" data-testid="category-skeleton">
           {Array.from({ length: 6 }, (_, index) => (
             <li key={index} className="category-card category-card--skeleton" aria-hidden="true">
@@ -48,16 +66,6 @@ export default function CategoryListPage() {
     );
   }
 
-  if (categories.length === 0) {
-    return (
-      <div className="empty-state">
-        <p className="empty-title">아직 카테고리가 없습니다.</p>
-        <p className="empty-hint">카테고리를 만들면 여기에 모여서 보여요.</p>
-      </div>
-    );
-  }
-
-  // 사용 중인 카테고리를 먼저, 보관된 것은 뒤로. (같은 그룹 안에서는 원래 순서 유지)
   const ordered = [...categories].sort(
     (a, b) => Number(a.status === 'ARCHIVED') - Number(b.status === 'ARCHIVED'),
   );
@@ -65,38 +73,64 @@ export default function CategoryListPage() {
 
   return (
     <section>
-      <div className="page-header">
-        <h1>카테고리</h1>
-        <p>
-          총 {categories.length}개{archivedCount > 0 && ` (보관 ${archivedCount}개)`}
-        </p>
+      <div className="page-header page-header--with-action">
+        <div>
+          <h1>카테고리</h1>
+          <p>
+            총 {categories.length}개{archivedCount > 0 && ` (보관 ${archivedCount}개)`}
+          </p>
+        </div>
+        <button type="button" className="primary-button" onClick={() => setShowCreate(true)}>
+          + 카테고리 만들기
+        </button>
       </div>
-      <ul className="category-grid">
-        {ordered.map((category) => {
-          const archived = category.status === 'ARCHIVED';
-          return (
-            <li key={category.id}>
-              <Link
-                to={`/categories/${category.id}`}
-                className={archived ? 'category-card category-card--archived' : 'category-card'}
-              >
-                <span className="category-card-head">
-                  <span
-                    className="category-dot category-dot--lg"
-                    style={{ background: category.color ?? '#9aa0a6' }}
-                    aria-hidden="true"
-                  />
-                  <strong>{category.name}</strong>
-                  {archived && <span className="badge badge--archived">보관됨</span>}
-                </span>
-                <span className="category-card-meta">
-                  거래 {category.transaction_count}건 · {formatAmount(category.total_amount)}
-                </span>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+
+      {categories.length === 0 ? (
+        <div className="empty-state">
+          <p className="empty-title">아직 카테고리가 없습니다.</p>
+          <p className="empty-hint">카테고리를 만들어 거래를 분류해 보세요.</p>
+          <button type="button" className="primary-button" onClick={() => setShowCreate(true)}>
+            첫 카테고리 만들기
+          </button>
+        </div>
+      ) : (
+        <ul className="category-grid">
+          {ordered.map((category) => {
+            const archived = category.status === 'ARCHIVED';
+            return (
+              <li key={category.id}>
+                <Link
+                  to={`/categories/${category.id}`}
+                  className={archived ? 'category-card category-card--archived' : 'category-card'}
+                >
+                  <span className="category-card-head">
+                    <span
+                      className="category-dot category-dot--lg"
+                      style={{ background: category.color ?? '#9aa0a6' }}
+                      aria-hidden="true"
+                    />
+                    {category.icon && <span aria-hidden="true">{category.icon}</span>}
+                    <strong>{category.name}</strong>
+                    {archived && <span className="badge badge--archived">보관됨</span>}
+                  </span>
+                  <span className="category-card-meta">
+                    거래 {category.transaction_count}건 · {formatAmount(category.total_amount)}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {showCreate && (
+        <div className="modal-backdrop">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="create-category-title">
+            <h2 id="create-category-title" className="modal-title">카테고리 만들기</h2>
+            <CategoryForm submitLabel="만들기" busy={busy} onSubmit={handleCreate} onCancel={() => !busy && setShowCreate(false)} />
+          </div>
+        </div>
+      )}
     </section>
   );
 }

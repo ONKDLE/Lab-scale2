@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -8,6 +8,8 @@ import StatusTabs from '../components/StatusTabs';
 import TransactionList from '../components/TransactionList';
 import TransactionSkeleton from '../components/TransactionSkeleton';
 import { useCategoryMap } from '../hooks/useCategoryMap';
+import { updateTransactionCategory } from '../api/transactions';
+import { useToast } from '../components/Toast';
 import { useTransactionList } from '../hooks/useTransactionList';
 import { parseListState, toSearchParams, type ListState } from '../lib/listParams';
 
@@ -30,6 +32,22 @@ export default function TransactionListPage() {
     keyword: keyword || undefined,
   });
   const categories = useCategoryMap();
+  const toast = useToast();
+  const [changingId, setChangingId] = useState<number | null>(null);
+
+  const handleCategoryChange = async (transaction: import('../types/transaction').Transaction, categoryId: number | null) => {
+    if (changingId === transaction.id) return;
+    setChangingId(transaction.id);
+    try {
+      await updateTransactionCategory(transaction.id, categoryId);
+      toast.success(categoryId === null ? '거래를 미분류로 변경했습니다.' : '거래 카테고리를 변경했습니다.');
+      reload();
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : '카테고리를 변경하지 못했습니다.');
+    } finally {
+      setChangingId(null);
+    }
+  };
 
   const goTo = (next: ListState, replace = false) =>
     setSearchParams(toSearchParams(next), { replace });
@@ -64,7 +82,7 @@ export default function TransactionListPage() {
         <p className="summary">
           총 {data.total_elements}건 · {page} / {data.total_pages} 페이지
         </p>
-        <TransactionList items={data.items} categories={categories} />
+        <TransactionList items={data.items} categories={categories} onCategoryChange={handleCategoryChange} changingId={changingId} />
         <Pagination
           page={page}
           totalPages={data.total_pages}
