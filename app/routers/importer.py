@@ -27,9 +27,20 @@ MAX_SOURCE_LENGTH = 30  # DB 컬럼 길이
 _QUERY_CHUNK = 500  # 한 번에 조회할 해시 개수 (SQLite 변수 개수 제한 대비)
 
 
-def _import_hash(user_id: int, row: ParsedRow, source: str) -> str:
-    """같은 거래인지 판별하는 기준값. 거래 '시각'까지 넣어서, 같은 날 같은 가게에서
-    같은 금액을 두 번 결제한 경우도 서로 다른 거래로 본다."""
+def _import_hash(user_id: int, row: ParsedRow) -> str:
+    """파일 출처가 달라도 같은 카드 거래는 같은 것으로 판단한다.
+    거래 시각까지 포함하므로 같은 날 같은 가맹점에서 같은 금액을 두 번 결제한
+    경우는 서로 다른 거래로 보존한다.
+    """
+    raw = (
+        f"{user_id}|{row.transaction_date.isoformat()} {row.transaction_time}"
+        f"|{row.amount}|{_normalize_merchant_name(row.merchant_name)}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _legacy_import_hash(user_id: int, row: ParsedRow, source: str) -> str:
+    """기존 버전에서 source_bank까지 포함해 만든 해시와 호환한다."""
     raw = (
         f"{user_id}|{row.transaction_date.isoformat()} {row.transaction_time}"
         f"|{row.amount}|{row.merchant_name}|{source}"
@@ -44,6 +55,35 @@ def _chunks(items: List[str], size: int) -> Iterable[List[str]]:
 
 def _bad_request(message: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+
+def _normalize_merchant_name(name: str) -> str:
+    """자동 분류용 가맹점명 키를 정규화한다."""
+    return " ".join(name.strip().lower().split())
+
+
+def _find_merchant_category(db: Session, user_id: int, merchant_name: str):
+    """사용자가 과거에 분류한 같은 가맹점의 활성 카테고리를 찾는다."""
+    key = _normalize_merchant_name(merchant_name)
+    if not key:
+        return None
+
+    mapping = (
+        db.query(models.MerchantCategoryMap)
+        .join(models.Category, models.Category.id == models.MerchantCategoryMap.category_id)
+        .filter(
+            models.MerchantCategoryMap.user_id == user_id,
+            models.MerchantCategoryMap.merchant_keyword == key,
+            models.Category.user_id == user_id,
+            models.Category.status == "ACTIVE",
+        )
+        .order_by(
+            models.MerchantCategoryMap.updated_at.desc(),
+            models.MerchantCategoryMap.id.desc(),
+        )
+        .first()
+    )
+    return mapping.category_id if mapping else None
 
 
 @router.post("/import", response_model=schemas.ImportSummary)
@@ -76,10 +116,14 @@ def import_card_statement(
         raise _bad_request(str(error))
 
     # 1) 이번 파일 안에서 같은 거래가 겹치는지, 2) 이미 DB에 있는지 확인
-    hashed = [(row, _import_hash(current_user_id, row, source)) for row in parsed.rows]
+    hashed = [
+        (row, _import_hash(current_user_id, row), _legacy_import_hash(current_user_id, row, source))
+        for row in parsed.rows
+    ]
     existing: Set[str] = set()
-    all_hashes = [hash_value for _, hash_value in hashed]
-    for chunk in _chunks(all_hashes, _QUERY_CHUNK):
+    all_hashes = [hash_value for _, hash_value, _ in hashed]
+    all_legacy_hashes = [legacy_hash for _, _, legacy_hash in hashed]
+    for chunk in _chunks(all_hashes + all_legacy_hashes, _QUERY_CHUNK):
         existing.update(
             value
             for (value,) in db.query(models.Transaction.raw_row_hash).filter(
@@ -90,15 +134,23 @@ def import_card_statement(
     new_transactions: List[models.Transaction] = []
     seen: Set[str] = set()
     duplicates = 0
-    for row, hash_value in hashed:
-        if hash_value in existing or hash_value in seen:
+    auto_classified = 0
+    unclassified = 0
+    for row, hash_value, legacy_hash in hashed:
+        if hash_value in existing or legacy_hash in existing or hash_value in seen:
             duplicates += 1
             continue
         seen.add(hash_value)
+        category_id = _find_merchant_category(db, current_user_id, row.merchant_name)
+        if category_id is None:
+            unclassified += 1
+        else:
+            auto_classified += 1
         new_transactions.append(
             models.Transaction(
                 user_id=current_user_id,
-                category_id=None,
+                transaction_type="EXPENSE",
+                category_id=category_id,
                 merchant_name=row.merchant_name,
                 amount=row.amount,
                 transaction_date=row.transaction_date,
@@ -126,4 +178,6 @@ def import_card_statement(
         duplicates=duplicates,
         skipped=len(parsed.errors),
         errors=[schemas.ImportRowError(row_number=e.row_number, reason=e.reason) for e in parsed.errors],
+        auto_classified=auto_classified,
+        unclassified=unclassified,
     )
