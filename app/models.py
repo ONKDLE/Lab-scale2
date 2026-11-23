@@ -51,6 +51,7 @@ class Transaction(Base):
     source_bank = Column(String(30), nullable=False)
     raw_row_hash = Column(String(64), unique=True, nullable=False)
     status = Column(String(20), nullable=False, default="ACTIVE")  # ACTIVE | CANCELLED
+    transaction_type = Column(String(10), nullable=False, default="EXPENSE")  # EXPENSE | INCOME
 
 
 class Budget(Base):
@@ -61,6 +62,18 @@ class Budget(Base):
     category_id = Column(Integer, ForeignKey("category.id"), nullable=False)
     month = Column(String(7), nullable=False)  # YYYY-MM
     limit_amount = Column(Numeric(12, 2), nullable=False)
+
+
+class MonthlyBudget(Base):
+    """사용자별 월 전체 예산. 기존 Budget 테이블과 독립적으로 유지한다."""
+    __tablename__ = "monthly_budget"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    month = Column(String(7), nullable=False)
+    limit_amount = Column(Numeric(12, 2), nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now())
 
 
 class MerchantCategoryMap(Base):
