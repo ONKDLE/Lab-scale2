@@ -24,7 +24,7 @@ export class ApiError extends Error {
 }
 
 type QueryValue = string | number | undefined | null;
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 interface RequestOptions {
   query?: Record<string, QueryValue>;
@@ -39,36 +39,59 @@ interface RequestOptions {
 
 // 401을 받았을 때 호출할 함수. 로그인 상태를 관리하는 곳(AuthProvider)이 등록한다.
 let unauthorizedHandler: (() => void) | null = null;
+
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
 }
 
 /** 값이 없는(undefined, null, 빈 문자열) 파라미터는 주소에 붙이지 않는다. */
-export function buildUrl(path: string, query?: Record<string, QueryValue>): string {
+export function buildUrl(
+  path: string,
+  query?: Record<string, QueryValue>,
+): string {
   const url = new URL(path, API_BASE_URL);
+
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       if (value === undefined || value === null || value === '') continue;
       url.searchParams.set(key, String(value));
     }
   }
+
   return url.toString();
 }
 
 function isAbortError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && (error as { name?: string }).name === 'AbortError';
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { name?: string }).name === 'AbortError'
+  );
 }
 
 export async function apiRequest<T>(
   method: Method,
   path: string,
-  { query, body, form, signal, skipAuthHandling = false }: RequestOptions = {},
+  {
+    query,
+    body,
+    form,
+    signal,
+    skipAuthHandling = false,
+  }: RequestOptions = {},
 ): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+
   const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
 
   let payload: string | undefined;
+
   if (form) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
     payload = new URLSearchParams(form).toString();
@@ -78,28 +101,51 @@ export async function apiRequest<T>(
   }
 
   let response: Response;
+
   try {
-    response = await fetch(buildUrl(path, query), { method, headers, body: payload, signal });
+    response = await fetch(buildUrl(path, query), {
+      method,
+      headers,
+      body: payload,
+      signal,
+    });
   } catch (error) {
     // 화면을 벗어나거나 새 요청으로 바뀌어 일부러 취소한 경우는 에러로 취급하지 않는다.
-    if (isAbortError(error)) throw error;
-    throw new ApiError(0, '서버에 연결할 수 없습니다. 백엔드(FastAPI)가 켜져 있는지 확인해 주세요.');
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    throw new ApiError(
+      0,
+      '서버에 연결할 수 없습니다. 백엔드(FastAPI)가 켜져 있는지 확인해 주세요.',
+    );
   }
 
   if (!response.ok) {
     let message = `요청에 실패했습니다. (HTTP ${response.status})`;
+
     try {
       const data = await response.json();
+
       // 백엔드는 에러를 {"detail": "메시지"} 형태로 내려준다.
-      if (typeof data?.detail === 'string') message = data.detail;
+      if (typeof data?.detail === 'string') {
+        message = data.detail;
+      }
     } catch {
       // 본문이 JSON이 아니면 기본 메시지를 쓴다.
     }
-    if (response.status === 401 && !skipAuthHandling) unauthorizedHandler?.();
+
+    if (response.status === 401 && !skipAuthHandling) {
+      unauthorizedHandler?.();
+    }
+
     throw new ApiError(response.status, message);
   }
 
-  if (response.status === 204) return undefined as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 
@@ -108,5 +154,70 @@ export function apiGet<T>(
   query?: Record<string, QueryValue>,
   signal?: AbortSignal,
 ): Promise<T> {
-  return apiRequest<T>('GET', path, { query, signal });
+  return apiRequest<T>('GET', path, {
+    query,
+    signal,
+  });
+}
+
+/** multipart/form-data 업로드 공통 함수 */
+export async function apiUpload<T>(
+  path: string,
+  file: File,
+  fields: Record<string, string> = {},
+): Promise<T> {
+  const formData = new FormData();
+
+  formData.append('file', file);
+
+  for (const [key, value] of Object.entries(fields)) {
+    formData.append(key, value);
+  }
+
+  const headers: HeadersInit = {
+    Accept: 'application/json',
+  };
+
+  const token = getToken();
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path), {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new ApiError(
+      0,
+      '서버에 연결할 수 없습니다. 백엔드(FastAPI)가 켜져 있는지 확인해 주세요.',
+    );
+  }
+
+  if (!response.ok) {
+    let message = `요청에 실패했습니다. (HTTP ${response.status})`;
+
+    try {
+      const data = await response.json();
+
+      if (typeof data?.detail === 'string') {
+        message = data.detail;
+      }
+    } catch {
+      // JSON이 아니면 기본 메시지 사용
+    }
+
+    if (response.status === 401) {
+      unauthorizedHandler?.();
+    }
+
+    throw new ApiError(response.status, message);
+  }
+
+  return (await response.json()) as T;
 }
