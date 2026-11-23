@@ -12,7 +12,7 @@ export default function Layout() {
       <header className="navbar">
         <div className="navbar-inner">
           <NavLink to="/" className="brand">
-            마이핀
+            가계부
           </NavLink>
           <nav className="nav-links" aria-label="주요 메뉴">
             <NavLink to="/" end className={linkClass}>
@@ -20,6 +20,12 @@ export default function Layout() {
             </NavLink>
             <NavLink to="/categories" className={linkClass}>
               카테고리
+            </NavLink>
+            <NavLink to="/import" className={linkClass}>
+              파일 불러오기
+            </NavLink>
+            <NavLink to="/stats" className={linkClass}>
+              월별 통계
             </NavLink>
           </nav>
           <div className="nav-user">

@@ -6,16 +6,20 @@ import type { Transaction } from '../types/transaction';
 interface Props {
   items: Transaction[];
   categories: Map<number, Category>;
+  onCategoryChange?: (transaction: Transaction, categoryId: number | null) => void;
+  changingId?: number | null;
 }
 
-/** 거래 카드 목록 */
-export default function TransactionList({ items, categories }: Props) {
+export default function TransactionList({ items, categories, onCategoryChange, changingId }: Props) {
+  const activeCategories = [...categories.values()].filter((category) => category.status === 'ACTIVE');
+
   return (
     <ul className="transaction-list">
       {items.map((transaction) => {
         const category =
           transaction.category_id !== null ? categories.get(transaction.category_id) : undefined;
         const cancelled = transaction.status === 'CANCELLED';
+        const changing = changingId === transaction.id;
 
         return (
           <li key={transaction.id} className={cancelled ? 'card card--cancelled' : 'card'}>
@@ -39,6 +43,28 @@ export default function TransactionList({ items, categories }: Props) {
             <div className="card-side">
               <span className="amount">{formatAmount(transaction.amount)}</span>
               {cancelled && <span className="badge badge--cancelled">취소됨</span>}
+              {onCategoryChange && (
+                <label className="category-select-label">
+                  <span className="visually-hidden">카테고리 변경</span>
+                  <select
+                    value={transaction.category_id ?? ''}
+                    disabled={changing}
+                    onChange={(event) =>
+                      onCategoryChange(
+                        transaction,
+                        event.target.value === '' ? null : Number(event.target.value),
+                      )
+                    }
+                  >
+                    <option value="">미분류</option>
+                    {activeCategories.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.icon ? `${item.icon} ` : ''}{item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
           </li>
         );
