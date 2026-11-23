@@ -3,6 +3,7 @@
 스프린트2: POST(중복 거래 거절) / GET 목록 / GET 상세
 스프린트3: PATCH /{id}/cancel - 거래를 삭제 대신 '취소(CANCELLED)' 상태로 전환 (본인 거래만 가능)
 스프린트4: GET 목록에 페이지 나누기 + 정렬 + 상태 필터 + 키워드 검색 + 잘못된 값 400 처리
+스프린트6: PATCH /{id}/restore - 취소한 거래를 되돌림. 보관(마감)된 카테고리의 거래는 취소/복구할 수 없다(409).
 """
 import hashlib
 import math
@@ -69,6 +70,63 @@ def _make_row_hash(user_id: int, payload: schemas.TransactionCreate) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+
+
+def _normalize_merchant_name(name: str) -> str:
+    """가맹점명을 자동 분류용 키로 정규화한다."""
+    return " ".join(name.strip().lower().split())
+
+
+def _find_merchant_category(db: Session, user_id: int, merchant_name: str):
+    """사용자가 과거에 같은 가맹점을 분류한 카테고리를 찾는다."""
+    key = _normalize_merchant_name(merchant_name)
+    if not key:
+        return None
+    mapping = (
+        db.query(models.MerchantCategoryMap)
+        .join(models.Category, models.Category.id == models.MerchantCategoryMap.category_id)
+        .filter(
+            models.MerchantCategoryMap.user_id == user_id,
+            models.MerchantCategoryMap.merchant_keyword == key,
+            models.Category.user_id == user_id,
+            models.Category.status == "ACTIVE",
+        )
+        .order_by(models.MerchantCategoryMap.updated_at.desc(), models.MerchantCategoryMap.id.desc())
+        .first()
+    )
+    return mapping.category_id if mapping else None
+
+
+def _remember_merchant_category(db: Session, user_id: int, merchant_name: str, category_id: int | None):
+    """사용자가 선택한 분류를 다음 자동 분류에 사용할 수 있도록 저장/갱신한다."""
+    if category_id is None:
+        return
+    key = _normalize_merchant_name(merchant_name)
+    if not key:
+        return
+    mapping = (
+        db.query(models.MerchantCategoryMap)
+        .filter(
+            models.MerchantCategoryMap.user_id == user_id,
+            models.MerchantCategoryMap.merchant_keyword == key,
+        )
+        .order_by(models.MerchantCategoryMap.id.desc())
+        .first()
+    )
+    if mapping is None:
+        mapping = models.MerchantCategoryMap(
+            user_id=user_id,
+            merchant_keyword=key,
+            category_id=category_id,
+            confidence_score=1.0,
+        )
+        db.add(mapping)
+    else:
+        mapping.category_id = category_id
+        mapping.confidence_score = 1.0
+        mapping.updated_at = func.now()
+
+
 def _get_transaction_any_owner_or_404(db: Session, transaction_id: int) -> models.Transaction:
     """소유자와 상관없이 존재 여부만 찾는다 (권한 체크가 필요한 cancel에서 사용)."""
     transaction = db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first()
@@ -101,10 +159,17 @@ def create_transaction(
             detail="이미 등록된 거래입니다 (같은 날짜·금액·가맹점·은행).",
         )
 
+    transaction_data = payload.model_dump()
+    # 카테고리를 직접 지정하지 않은 신규 거래는 과거 분류 기록을 우선 적용한다.
+    if transaction_data.get("category_id") is None:
+        transaction_data["category_id"] = _find_merchant_category(
+            db, current_user_id, transaction_data["merchant_name"]
+        )
+
     transaction = models.Transaction(
         user_id=current_user_id,
         raw_row_hash=row_hash,
-        **payload.model_dump(),
+        **transaction_data,
     )
     db.add(transaction)
     db.commit()
@@ -172,6 +237,63 @@ def list_transactions(
     }
 
 
+@router.patch("/{transaction_id}/category", response_model=schemas.TransactionOut)
+def update_transaction_category(
+    transaction_id: int,
+    payload: schemas.TransactionCategoryUpdate,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """거래의 카테고리를 변경한다. category_id=null이면 미분류로 변경한다."""
+    transaction = _get_transaction_any_owner_or_404(db, transaction_id)
+
+    if transaction.user_id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="본인이 등록한 거래만 카테고리를 변경할 수 있습니다.",
+        )
+
+    if payload.category_id is not None:
+        category = db.query(models.Category).filter(
+            models.Category.id == payload.category_id,
+            models.Category.user_id == current_user_id,
+        ).first()
+        if category is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="카테고리를 찾을 수 없습니다.",
+            )
+        if category.status == "ARCHIVED":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="보관된 카테고리는 거래에 지정할 수 없습니다. 먼저 보관을 해제해 주세요.",
+            )
+
+    transaction.category_id = payload.category_id
+    # 사용자가 직접 선택한 분류를 기억해 같은 가맹점의 다음 거래에 자동 적용한다.
+    if payload.category_id is not None:
+        _remember_merchant_category(
+            db, current_user_id, transaction.merchant_name, payload.category_id
+        )
+
+        # 아직 미분류인 같은 가맹점의 기존 거래에도 같은 카테고리를 적용한다.
+        # 이미 사용자가 직접 분류한 거래는 덮어쓰지 않는다.
+        merchant_key = _normalize_merchant_name(transaction.merchant_name)
+        if merchant_key:
+            same_merchant_transactions = db.query(models.Transaction).filter(
+                models.Transaction.user_id == current_user_id,
+                models.Transaction.id != transaction.id,
+                models.Transaction.category_id.is_(None),
+                func.lower(func.trim(models.Transaction.merchant_name)) == merchant_key,
+            ).all()
+            for item in same_merchant_transactions:
+                item.category_id = payload.category_id
+
+    db.commit()
+    db.refresh(transaction)
+    return transaction
+
+
 @router.get("/{transaction_id}", response_model=schemas.TransactionOut)
 def get_transaction(
     transaction_id: int,
@@ -187,6 +309,29 @@ def get_transaction(
     return transaction
 
 
+def _change_transaction_status(
+    db: Session, transaction_id: int, current_user_id: int, new_status: str, forbidden_message: str
+) -> models.Transaction:
+    """404(없음) -> 403(남의 거래) -> 409(보관된 카테고리) 순서로 검사한 뒤 상태를 바꾼다."""
+    transaction = _get_transaction_any_owner_or_404(db, transaction_id)
+
+    if transaction.user_id != current_user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=forbidden_message)
+
+    if transaction.category_id is not None:
+        category = db.get(models.Category, transaction.category_id)
+        if category is not None and category.status == "ARCHIVED":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="보관된 카테고리의 거래는 변경할 수 없습니다. 먼저 카테고리의 보관을 해제해 주세요.",
+            )
+
+    transaction.status = new_status
+    db.commit()
+    db.refresh(transaction)
+    return transaction
+
+
 @router.patch("/{transaction_id}/cancel", response_model=schemas.TransactionOut)
 def cancel_transaction(
     transaction_id: int,
@@ -194,15 +339,18 @@ def cancel_transaction(
     db: Session = Depends(get_db),
 ):
     """거래를 '취소(CANCELLED)' 상태로 전환. 본인이 등록한 거래만 가능 (아니면 403)."""
-    transaction = _get_transaction_any_owner_or_404(db, transaction_id)
+    return _change_transaction_status(
+        db, transaction_id, current_user_id, "CANCELLED", "본인이 등록한 거래만 취소할 수 있습니다."
+    )
 
-    if transaction.user_id != current_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="본인이 등록한 거래만 취소할 수 있습니다.",
-        )
 
-    transaction.status = "CANCELLED"
-    db.commit()
-    db.refresh(transaction)
-    return transaction
+@router.patch("/{transaction_id}/restore", response_model=schemas.TransactionOut)
+def restore_transaction(
+    transaction_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """취소한 거래를 '정상(ACTIVE)'으로 되돌림. 본인이 등록한 거래만 가능 (아니면 403)."""
+    return _change_transaction_status(
+        db, transaction_id, current_user_id, "ACTIVE", "본인이 등록한 거래만 복구할 수 있습니다."
+    )
